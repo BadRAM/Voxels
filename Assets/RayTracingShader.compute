@@ -81,14 +81,15 @@ void IntersectVoxel(Ray ray, inout RayHit bestHit)
     {
         if (!bestHit.hit)
         {
-            // float d = _VoxelWorld.SampleLevel(sampler_VoxelWorld, voxel / 64.0f, 0).r;
-            float d = SimplexNoise(SimplexNoise(voxel*0.1) + voxel*0.01) + voxel.y*0.01;
+            //float d = _VoxelWorld.SampleLevel(sampler_VoxelWorld, voxel / 64.0f, 0).r;
+            float d = SimplexNoise(SimplexNoise(voxel*0.01) + voxel*0.01) + voxel.y*0.01;
             //float d = voxel.y;
-            if ((d <= 0.2f || bestHit.position.z > 0) && !bestHit.hit)
+            if ((d <= 0.5f || bestHit.position.z > 0) && !bestHit.hit)
             {
                 bestHit.hit = true;
                 hitVoxel = voxel;
                 // material = mat;
+                bestHit.normal.r = _VoxelWorld.SampleLevel(sampler_VoxelWorld, voxel / 128.0f, 0).r;
                 break;
             }
             
