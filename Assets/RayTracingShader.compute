@@ -1,0 +1,208 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+
+#include "SimplexNoise3D.hlsl"
+
+RWTexture2D<float4> Result;
+float4x4 _CameraToWorld;
+float4x4 _CameraInverseProjection;
+int _MaxSteps;
+Texture3D<float4> _VoxelWorld;
+Texture2D<float4> _BlockTexture;
+Texture2D<float4> _SkyboxTexture;
+SamplerState sampler_VoxelWorld;
+SamplerState sampler_BlockTexture;
+SamplerState sampler_SkyboxTexture;
+static const float PI = 3.14159265f;
+
+struct Ray
+{
+    float3 origin;
+    float3 direction;
+    float3 energy;
+};
+
+Ray CreateRay(float3 origin, float3 direction)
+{
+    Ray ray;
+    ray.origin = origin;
+    ray.direction = direction;
+    ray.energy = float3(1.0f, 1.0f, 1.0f);
+    return ray;
+}
+
+struct RayHit
+{
+    float3 position;
+    float distance;
+    float3 normal;
+    float2 uv;
+    bool hit;
+};
+
+RayHit CreateRayHit()
+{
+    RayHit rayhit;
+    rayhit.position = float3(0.0f, 0.0f, 0.0f);
+    rayhit.distance = 1.#INF;
+    rayhit.normal = float3(0.0f, 0.0f, 0.0f);
+    rayhit.uv = float2(0.0f,0.0f);
+    rayhit.hit = false;
+    return rayhit;
+}
+
+Ray CreateCameraRay(float2 uv)
+{
+    // Transform the camera origin to world space
+    float3 origin = mul(_CameraToWorld, float4(0.0f, 0.0f, 0.0f, 1.0f)).xyz;
+
+    // Invert the perspective projection of the view-space position
+    float3 direction = mul(_CameraInverseProjection, float4(uv, 0.0f, 1.0f)).xyz;
+    // Transform the direction from camera to world space and normalize
+    direction = mul(_CameraToWorld, float4(direction, 0.0f)).xyz;
+    direction = normalize(direction);
+    return CreateRay(origin, direction);
+}
+
+void IntersectVoxel(Ray ray, inout RayHit bestHit)
+{
+    // int maxSteps = 300;
+    float3 voxel = floor(ray.origin)+.501f;
+    float3 step = sign(ray.direction);
+    float3 tMax = (voxel - ray.origin) / ray.direction;
+    float3 tDelta = 1.0f / abs(ray.direction);
+    float3 hitVoxel = voxel;
+    //int mat = 0;
+	
+    bestHit.hit = false;
+    
+    float hitT = 0.0f;
+    for(int i=0; i < _MaxSteps; i++)
+    {
+        if (!bestHit.hit)
+        {
+            // float d = _VoxelWorld.SampleLevel(sampler_VoxelWorld, voxel / 64.0f, 0).r;
+            float d = SimplexNoise(SimplexNoise(voxel*0.1) + voxel*0.01) + voxel.y*0.01;
+            //float d = voxel.y;
+            if ((d <= 0.2f || bestHit.position.z > 0) && !bestHit.hit)
+            {
+                bestHit.hit = true;
+                hitVoxel = voxel;
+                // material = mat;
+                break;
+            }
+            
+            bool cond1 = tMax.x < tMax.y;
+            bool cond2 = tMax.x < tMax.z;
+            bool cond3 = tMax.y < tMax.z;
+            
+            if (cond1 && cond2) 
+            { 
+                if (!bestHit.hit) 
+                {
+                    bestHit.normal = float3(-step.x, 0.0f, 0.0f);
+                    hitT = tMax.x;
+                }
+                voxel.x += step.x;
+                tMax.x += tDelta.x;
+            }
+            else if (cond3 && !cond1) 
+            {
+                if (!bestHit.hit) 
+                {
+                    bestHit.normal = float3(0.0f, -step.y, 0.0f);	
+                    hitT = tMax.y;
+                }
+                voxel.y += step.y;
+                tMax.y += tDelta.y;
+            }
+            else
+            {
+                if (!bestHit.hit) 
+                {
+                    bestHit.normal = float3(0.0f, 0.0f, -step.z);		
+                    hitT = tMax.z;
+                }
+                voxel.z += step.z;
+                tMax.z += tDelta.z;
+            }
+                
+        }
+    }
+	// if (bestHit.hit && (hitVoxel.x > 27.0f || hitVoxel.x < -27.0f || hitVoxel.z < -27.0f || hitVoxel.z > 27.0f))
+	// {
+	// 	bestHit.hit = false;
+	//     bestHit.distance = 1000.0f;
+	// 	return;
+	// }
+	
+	bestHit.position = ray.origin + hitT * ray.direction;
+    bestHit.distance = hitT;
+	return;
+}
+
+RayHit Trace(Ray ray)
+{
+    RayHit bestHit = CreateRayHit();
+    IntersectVoxel(ray, bestHit);
+    return bestHit;
+}
+
+float3 Shade(inout Ray ray, RayHit hit)
+{
+    if (hit.distance < 1.#INF)
+    {
+        float3 specular = float3(0.6f, 0.6f, 0.6f);
+        // Reflect the ray and multiply energy with specular reflection
+        ray.origin = hit.position + hit.normal * 0.001f;
+        ray.direction = reflect(ray.direction, hit.normal);
+        ray.energy *= specular;
+        // Return nothing
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+    else
+    {
+        // Erase the ray's energy - the sky doesn't reflect anything
+        ray.energy = 0.0f;
+        // Sample the skybox and write it
+        float theta = acos(ray.direction.y) / -PI;
+        float phi = atan2(ray.direction.x, -ray.direction.z) / -PI * 0.5f;
+        return _SkyboxTexture.SampleLevel(sampler_SkyboxTexture, float2(phi, theta), 0).xyz;
+    }
+}
+
+[numthreads(8,8,1)]
+void CSMain(uint3 id : SV_DispatchThreadID)
+{
+    // Get the dimensions of the RenderTexture
+    uint width, height;
+    Result.GetDimensions(width, height);
+    
+    // Transform pixel to [-1,1] range
+    float2 uv = float2((id.xy + float2(0.5f, 0.5f)) / float2(width, height) * 2.0f - 1.0f);
+    
+    // Get a ray for the UVs
+    Ray ray = CreateCameraRay(uv);
+    
+    // Sample the skybox and write it
+    float theta = acos(ray.direction.y) / -PI;
+    float phi = atan2(ray.direction.x, -ray.direction.z) / -PI * 0.5f;
+    Result[id.xy] = _SkyboxTexture.SampleLevel(sampler_SkyboxTexture, float2(phi, theta), 0);
+
+    // Trace and shade
+    // float3 result = float3(0, 0, 0);
+    // for (int i = 0; i < 8; i++)
+    // {
+    //     RayHit hit = Trace(ray);
+    //     result += ray.energy * Shade(ray, hit);
+    //     if (!any(ray.energy))
+    //         break;
+    // }
+    //
+    // Result[id.xy] = float4(result, 1);
+    RayHit hit = Trace(ray);
+    if (hit.hit)
+    {
+        Result[id.xy] = (float4(hit.normal, 1) * 0.1f) + _BlockTexture.SampleLevel(sampler_BlockTexture, hit.uv, 0);
+    }
+}
